@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { formatCurrencyINR } from '../utils/currency';
 
 const Inventory = () => {
   const [items, setItems] = useState([]);
@@ -206,7 +207,7 @@ const Inventory = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{item.quantity}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.min_stock_level}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${item.unit_price?.toFixed(2) || '0.00'}
+                    {formatCurrencyINR(item.unit_price || 0)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     {item.quantity <= item.min_stock_level ? (

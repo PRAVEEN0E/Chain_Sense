@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import LeafletMap from '../components/LeafletMap';
 
 const Shipments = () => {
   const [shipments, setShipments] = useState([]);
@@ -273,20 +274,30 @@ const Shipments = () => {
                   </div>
                 </div>
 
-                {/* Google Maps Integration Placeholder */}
-                {(selectedShipment.current_lat && selectedShipment.current_lng) && (
+                {(selectedShipment.current_lat && selectedShipment.current_lng) ? (
                   <div>
                     <h3 className="font-semibold text-gray-900 mb-2">Location on Map</h3>
-                    <div className="h-64 bg-gray-200 rounded-lg flex items-center justify-center">
+                    <div className="h-64">
+                      <LeafletMap
+                        latitude={Number(selectedShipment.current_lat)}
+                        longitude={Number(selectedShipment.current_lng)}
+                        className="h-64"
+                      />
+                    </div>
+                    <div className="text-right mt-2">
                       <a
-                        href={`https://www.google.com/maps?q=${selectedShipment.current_lat},${selectedShipment.current_lng}`}
+                        href={`https://www.openstreetmap.org/?mlat=${selectedShipment.current_lat}&mlon=${selectedShipment.current_lng}#map=10/${selectedShipment.current_lat}/${selectedShipment.current_lng}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-primary-600 hover:text-primary-700"
+                        className="text-primary-600 hover:text-primary-700 text-sm"
                       >
-                        View on Google Maps
+                        Open in OpenStreetMap ↗
                       </a>
                     </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500">
+                    No coordinates available yet. Update the shipment location to view on the map.
                   </div>
                 )}
 

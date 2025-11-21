@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { formatCurrencyINR } from '../utils/currency';
 
 const PurchaseOrders = () => {
   const [orders, setOrders] = useState([]);
@@ -218,7 +219,7 @@ const PurchaseOrders = () => {
                 <span className={`px-3 py-1 text-sm font-semibold rounded-full ${getStatusColor(order.status)}`}>
                   {order.status}
                 </span>
-                <span className="text-lg font-bold text-gray-900">${order.total_amount?.toFixed(2)}</span>
+                <span className="text-lg font-bold text-gray-900">{formatCurrencyINR(order.total_amount)}</span>
               </div>
             </div>
 
@@ -240,8 +241,8 @@ const PurchaseOrders = () => {
                         <tr key={idx}>
                           <td className="px-4 py-2 text-sm text-gray-900">{item.item_name}</td>
                           <td className="px-4 py-2 text-sm text-gray-900">{item.quantity}</td>
-                          <td className="px-4 py-2 text-sm text-gray-900">${item.unit_price?.toFixed(2)}</td>
-                          <td className="px-4 py-2 text-sm text-gray-900">${item.subtotal?.toFixed(2)}</td>
+                          <td className="px-4 py-2 text-sm text-gray-900">{formatCurrencyINR(item.unit_price)}</td>
+                          <td className="px-4 py-2 text-sm text-gray-900">{formatCurrencyINR(item.subtotal)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -364,7 +365,7 @@ const PurchaseOrders = () => {
                       />
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-gray-700">
-                          ${(item.quantity * item.unit_price).toFixed(2)}
+                          {formatCurrencyINR(item.quantity * item.unit_price)}
                         </span>
                         {formData.items.length > 1 && (
                           <button
@@ -379,10 +380,9 @@ const PurchaseOrders = () => {
                     </div>
                   ))}
                   <div className="mt-2 text-right text-lg font-semibold text-gray-900">
-                    Total: $
-                    {formData.items
-                      .reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
-                      .toFixed(2)}
+                    Total: {formatCurrencyINR(
+                      formData.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+                    )}
                   </div>
                 </div>
 

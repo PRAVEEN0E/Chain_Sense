@@ -54,19 +54,9 @@ TWILIO_WHATSAPP_NUMBER=whatsapp:+1234567890
 
 **Note**: Twilio is optional. The app will work without it, but SMS/WhatsApp notifications won't be sent.
 
-### Optional: Google Maps API (Shipment Tracking)
+### Maps (Shipment Tracking)
 
-1. Go to: https://console.cloud.google.com
-2. Create a new project or select existing
-3. Enable "Maps JavaScript API" and "Geocoding API"
-4. Create credentials (API Key)
-5. Add to `.env`:
-
-```env
-GOOGLE_MAPS_API_KEY=your-google-maps-api-key
-```
-
-**Note**: Google Maps API is optional. Basic tracking will work without it.
+We now use [Leaflet](https://leafletjs.com/) with free OpenStreetMap tiles, so there is no API key required. The map will work out of the box after installing dependencies.
 
 ## Production Configuration
 

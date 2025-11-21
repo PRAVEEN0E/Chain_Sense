@@ -90,6 +90,54 @@ function initializeDatabase() {
     FOREIGN KEY (item_id) REFERENCES inventory(id)
   )`);
 
+  // Invoices table
+  db.run(`CREATE TABLE IF NOT EXISTS invoices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_number TEXT UNIQUE NOT NULL,
+    po_id INTEGER,
+    vendor_id INTEGER NOT NULL,
+    amount_due REAL NOT NULL,
+    amount_paid REAL NOT NULL DEFAULT 0,
+    status TEXT DEFAULT 'unpaid',
+    issue_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    due_date DATETIME,
+    notes TEXT,
+    billing_address TEXT,
+    terms TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (po_id) REFERENCES purchase_orders(id),
+    FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+  )`);
+
+  // Invoice Items table
+  db.run(`CREATE TABLE IF NOT EXISTS invoice_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL,
+    description TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    unit_price REAL NOT NULL,
+    subtotal REAL NOT NULL,
+    FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+  )`);
+
+  // Payments table
+  db.run(`CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    method TEXT,
+    reference TEXT,
+    notes TEXT,
+    recorded_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (invoice_id) REFERENCES invoices(id),
+    FOREIGN KEY (recorded_by) REFERENCES users(id)
+  )`);
+
   // Shipments table
   db.run(`CREATE TABLE IF NOT EXISTS shipments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

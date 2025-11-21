@@ -2,6 +2,8 @@ const express = require('express');
 const db = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const nodemailer = require('nodemailer');
+const { ensureInvoicePdf } = require('../utils/invoicePdfManager');
+const { sendInvoicePendingEmail } = require('../utils/invoiceNotification');
 const router = express.Router();
 
 // Email transporter setup
@@ -14,6 +16,184 @@ const transporter = nodemailer.createTransport({
     pass: process.env.SMTP_PASS
   }
 });
+
+const DEFAULT_INVOICE_DUE_DAYS = 30;
+
+const formatCurrencyINR = (value = 0) => new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  minimumFractionDigits: 2,
+}).format(Number(value || 0));
+
+const calculateDueDateFromTerms = (paymentTerms) => {
+  const baselineDays = DEFAULT_INVOICE_DUE_DAYS;
+  if (!paymentTerms) {
+    const defaultDate = new Date(Date.now() + baselineDays * 24 * 60 * 60 * 1000);
+    return defaultDate.toISOString();
+  }
+
+  const match = paymentTerms.match(/(\d+)/);
+  const parsedDays = match ? parseInt(match[1], 10) : baselineDays;
+  const daysToAdd = Number.isFinite(parsedDays) && parsedDays > 0 ? parsedDays : baselineDays;
+  const dueDate = new Date(Date.now() + daysToAdd * 24 * 60 * 60 * 1000);
+  return dueDate.toISOString();
+};
+
+const createInvoiceForPurchaseOrder = (poId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT i.*, v.name as vendor_name
+       FROM invoices i
+       LEFT JOIN vendors v ON i.vendor_id = v.id
+       WHERE i.po_id = ?`,
+      [poId],
+      (existingErr, existingInvoice) => {
+        if (existingErr) {
+          return reject(existingErr);
+        }
+
+        if (existingInvoice) {
+          return resolve({ alreadyExisted: true, invoice: existingInvoice });
+        }
+
+        db.get(
+          `SELECT po.*, v.name as vendor_name, v.address as vendor_address, v.payment_terms
+           FROM purchase_orders po
+           LEFT JOIN vendors v ON po.vendor_id = v.id
+           WHERE po.id = ?`,
+          [poId],
+          (poErr, po) => {
+            if (poErr) {
+              return reject(poErr);
+            }
+
+            if (!po) {
+              return reject(new Error('Purchase order not found for invoice generation'));
+            }
+
+            const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+            const dueDate = calculateDueDateFromTerms(po.payment_terms);
+            const notes = `Auto-generated from Purchase Order ${po.po_number}`;
+            const billingAddress = po.vendor_address || null;
+            const terms = po.payment_terms || 'Net 30';
+
+            db.run(
+              `INSERT INTO invoices (invoice_number, po_id, vendor_id, amount_due, amount_paid, status, due_date, notes, billing_address, terms, created_by)
+               VALUES (?, ?, ?, ?, 0, 'unpaid', ?, ?, ?, ?, ?)`,
+              [
+                invoiceNumber,
+                po.id,
+                po.vendor_id,
+                po.total_amount,
+                dueDate,
+                notes,
+                billingAddress,
+                terms,
+                userId || null,
+              ],
+              function(insertErr) {
+                if (insertErr) {
+                  return reject(insertErr);
+                }
+
+                const invoiceId = this.lastID;
+
+                db.all(
+                  `SELECT poi.*, i.name as item_name
+                   FROM purchase_order_items poi
+                   LEFT JOIN inventory i ON poi.item_id = i.id
+                   WHERE poi.po_id = ?`,
+                  [po.id],
+                  (itemsErr, items) => {
+                    if (itemsErr) {
+                      return reject(itemsErr);
+                    }
+
+                    const hasItems = Array.isArray(items) && items.length > 0;
+                    const invoiceLineItems = (hasItems ? items : [{
+                      item_id: null,
+                      item_name: `Purchase Order ${po.po_number}`,
+                      quantity: 1,
+                      unit_price: po.total_amount,
+                      subtotal: po.total_amount,
+                    }]).map((item) => {
+                      const quantity = Number(item.quantity) || 0;
+                      const unitPrice = Number(item.unit_price) || 0;
+                      const subtotal = Number(item.subtotal || quantity * unitPrice);
+                      return {
+                        description: item.item_name || `Item ${item.item_id || ''}`.trim(),
+                        quantity: quantity > 0 ? quantity : 1,
+                        unit_price: unitPrice > 0 ? unitPrice : subtotal,
+                        subtotal: subtotal > 0 ? subtotal : po.total_amount,
+                      };
+                    });
+
+                    const insertItemPromises = invoiceLineItems.map((line) => (
+                      new Promise((resolveLine, rejectLine) => {
+                        db.run(
+                          `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, subtotal)
+                           VALUES (?, ?, ?, ?, ?)`,
+                          [invoiceId, line.description, line.quantity, line.unit_price, line.subtotal],
+                          (lineErr) => {
+                            if (lineErr) rejectLine(lineErr);
+                            else resolveLine();
+                          }
+                        );
+                      })
+                    ));
+
+                    Promise.all(insertItemPromises)
+                      .then(() => {
+                        db.get(
+                          `SELECT i.*, v.name as vendor_name, v.email as vendor_email
+                           FROM invoices i
+                           LEFT JOIN vendors v ON i.vendor_id = v.id
+                           WHERE i.id = ?`,
+                          [invoiceId],
+                          (fetchErr, invoiceRow) => {
+                            if (fetchErr || !invoiceRow) {
+                              return reject(fetchErr || new Error('Invoice fetch failed after creation'));
+                            }
+
+                            const finalize = () => resolve({ created: true, invoice: invoiceRow });
+
+                            ensureInvoicePdf(invoiceId)
+                              .then(async ({ filePath }) => {
+                                try {
+                                  if (invoiceRow.vendor_email) {
+                                    await sendInvoicePendingEmail({
+                                      vendorEmail: invoiceRow.vendor_email,
+                                      vendorName: invoiceRow.vendor_name,
+                                      invoiceNumber: invoiceRow.invoice_number,
+                                      amountDue: invoiceRow.amount_due,
+                                      dueDate: invoiceRow.due_date,
+                                      pdfPath: filePath,
+                                    });
+                                  }
+                                } catch (emailErr) {
+                                  console.error('Invoice email send failed:', emailErr);
+                                } finally {
+                                  finalize();
+                                }
+                              })
+                              .catch((pdfErr) => {
+                                console.error('Invoice PDF generation failed:', pdfErr);
+                                finalize();
+                              });
+                          }
+                        );
+                      })
+                      .catch((lineErr) => reject(lineErr));
+                  }
+                );
+              }
+            );
+          }
+        );
+      }
+    );
+  });
+};
 
 // Get all purchase orders
 router.get('/', authenticate, (req, res) => {
@@ -195,7 +375,7 @@ router.post('/', authenticate, authorize('admin', 'manager'), (req, res) => {
                   <h3>Order Details:</h3>
                   <ul>
                     <li><strong>PO Number:</strong> ${po_number}</li>
-                    <li><strong>Total Amount:</strong> $${total_amount.toFixed(2)}</li>
+                    <li><strong>Total Amount:</strong> ${formatCurrencyINR(total_amount)}</li>
                     <li><strong>Expected Delivery:</strong> ${expected_delivery_date || 'Not specified'}</li>
                   </ul>
                   <h3>Items:</h3>
@@ -210,8 +390,8 @@ router.post('/', authenticate, authorize('admin', 'manager'), (req, res) => {
                       <tr>
                         <td>${item.item_name || 'Item ' + item.item_id}</td>
                         <td>${item.quantity}</td>
-                        <td>$${item.unit_price.toFixed(2)}</td>
-                        <td>$${(item.quantity * item.unit_price).toFixed(2)}</td>
+                        <td>${formatCurrencyINR(item.unit_price)}</td>
+                        <td>${formatCurrencyINR(item.quantity * item.unit_price)}</td>
                       </tr>
                     `).join('')}
                   </table>
@@ -270,11 +450,15 @@ router.put('/:id', authenticate, (req, res) => {
       let inventoryUpdateResults = null;
       let inventoryUpdateError = null;
 
-      function sendResponse() {
-        if (responseSent) return;
-        responseSent = true;
+      const shouldGenerateInvoice = status === 'completed' && order.current_status !== 'completed';
+      let invoiceDetails = null;
+      let invoiceGenerationError = null;
+      let invoiceCreated = false;
+      let invoiceAlreadyExisted = false;
+      let invoiceStepStarted = false;
+      let invoiceStepFinished = false;
 
-        // Create notification for PO status change
+      const sendStatusNotification = () => {
         const statusMessages = {
           'pending': 'Purchase Order has been set to pending',
           'completed': 'Purchase Order has been completed',
@@ -289,6 +473,13 @@ router.put('/:id', authenticate, (req, res) => {
             if (notifErr) console.error('Notification error:', notifErr);
           }
         );
+      };
+
+      const sendResponseBody = () => {
+        if (responseSent) return;
+        responseSent = true;
+
+        sendStatusNotification();
 
         const wasCompleted = status === 'completed';
         const wasAlreadyCompleted = order.current_status === 'completed';
@@ -299,6 +490,13 @@ router.put('/:id', authenticate, (req, res) => {
           inventory_updated: shouldUpdateInventory && inventoryUpdateResults !== null,
           inventory_error: inventoryUpdateError,
           inventory_details: inventoryUpdateResults,
+          billing: shouldGenerateInvoice ? {
+            attempted: true,
+            created: invoiceCreated,
+            already_existed: invoiceAlreadyExisted,
+            invoice: invoiceDetails,
+            error: invoiceGenerationError
+          } : { attempted: false },
           previous_status: order.current_status,
           new_status: status,
           debug: {
@@ -307,7 +505,40 @@ router.put('/:id', authenticate, (req, res) => {
             should_update: shouldUpdateInventory
           }
         });
-      }
+      };
+
+      const finalizeResponse = () => {
+        if (!shouldGenerateInvoice) {
+          sendResponseBody();
+          return;
+        }
+
+        if (invoiceStepFinished) {
+          sendResponseBody();
+          return;
+        }
+
+        if (invoiceStepStarted) {
+          return;
+        }
+
+        invoiceStepStarted = true;
+
+        createInvoiceForPurchaseOrder(req.params.id, req.user.id)
+          .then((result) => {
+            invoiceDetails = result.invoice || null;
+            invoiceCreated = !!result.created;
+            invoiceAlreadyExisted = !!result.alreadyExisted;
+          })
+          .catch((invoiceErr) => {
+            console.error('Invoice generation error:', invoiceErr);
+            invoiceGenerationError = invoiceErr.message || 'Failed to generate invoice';
+          })
+          .finally(() => {
+            invoiceStepFinished = true;
+            sendResponseBody();
+          });
+      };
 
       db.run(
         'UPDATE purchase_orders SET status = ? WHERE id = ?',
@@ -333,14 +564,14 @@ router.put('/:id', authenticate, (req, res) => {
                 if (err) {
                   console.error('❌ Error fetching PO items:', err);
                   inventoryUpdateError = `Failed to fetch PO items: ${err.message}`;
-                  sendResponse();
+                  finalizeResponse();
                   return;
                 }
 
                 if (!items || items.length === 0) {
                   console.log('⚠️ No items found in purchase order');
                   inventoryUpdateError = 'No items found in purchase order';
-                  sendResponse();
+                  finalizeResponse();
                   return;
                 }
 
@@ -351,16 +582,16 @@ router.put('/:id', authenticate, (req, res) => {
                   return new Promise((resolve, reject) => {
                     // Ensure item_id is an integer
                     const itemId = parseInt(item.item_id);
-                    const quantityToAdd = parseInt(item.quantity);
+                    const quantityToReduce = parseInt(item.quantity);
 
-                    if (isNaN(itemId) || isNaN(quantityToAdd)) {
+                    if (isNaN(itemId) || isNaN(quantityToReduce)) {
                       const errorMsg = `Invalid item_id (${item.item_id}) or quantity (${item.quantity})`;
                       console.error(`❌ ${errorMsg}`);
                       reject(new Error(errorMsg));
                       return;
                     }
 
-                    console.log(`   Processing item_id: ${itemId}, quantity to add: ${quantityToAdd}`);
+                    console.log(`   Processing item_id: ${itemId}, quantity to deduct: ${quantityToReduce}`);
 
                     // First verify item exists
                     db.get('SELECT id, name, quantity as current_quantity FROM inventory WHERE id = ?', [itemId], (getErr, inventoryItem) => {
@@ -381,10 +612,10 @@ router.put('/:id', authenticate, (req, res) => {
                       // Update inventory
                       db.run(
                         `UPDATE inventory 
-                         SET quantity = quantity + ?,
+                         SET quantity = MAX(quantity - ?, 0),
                              updated_at = CURRENT_TIMESTAMP
                          WHERE id = ?`,
-                        [quantityToAdd, itemId],
+                        [quantityToReduce, itemId],
                         function(updateErr) {
                           if (updateErr) {
                             console.error(`❌ Error updating inventory for item ${itemId}:`, updateErr);
@@ -396,8 +627,8 @@ router.put('/:id', authenticate, (req, res) => {
                               return;
                             }
 
-                            const newQuantity = inventoryItem.current_quantity + quantityToAdd;
-                            console.log(`✅ Inventory updated: Item ${itemId} (${inventoryItem.name}) - Added ${quantityToAdd} units (was ${inventoryItem.current_quantity}, now ${newQuantity})`);
+                            const newQuantity = Math.max(inventoryItem.current_quantity - quantityToReduce, 0);
+                            console.log(`✅ Inventory updated: Item ${itemId} (${inventoryItem.name}) - Deducted ${quantityToReduce} units (was ${inventoryItem.current_quantity}, now ${newQuantity})`);
                             
                             // Verify the update by reading back
                             db.get('SELECT quantity FROM inventory WHERE id = ?', [itemId], (verifyErr, verified) => {
@@ -411,7 +642,7 @@ router.put('/:id', authenticate, (req, res) => {
                             resolve({
                               item_id: itemId,
                               item_name: inventoryItem.name,
-                              quantity_added: quantityToAdd,
+                              quantity_deducted: quantityToReduce,
                               old_quantity: inventoryItem.current_quantity,
                               new_quantity: newQuantity
                             });
@@ -429,7 +660,7 @@ router.put('/:id', authenticate, (req, res) => {
                     inventoryUpdateResults = results;
 
                     // Create notification for inventory update
-                    const itemSummary = results.map(r => `${r.item_name}: +${r.quantity_added} (${r.old_quantity} → ${r.new_quantity})`).join(', ');
+                    const itemSummary = results.map(r => `${r.item_name}: -${r.quantity_deducted} (${r.old_quantity} → ${r.new_quantity})`).join(', ');
                     
                     db.run(
                       `INSERT INTO notifications (user_id, type, title, message)
@@ -459,20 +690,20 @@ router.put('/:id', authenticate, (req, res) => {
                       }
                     );
 
-                    sendResponse();
+                    finalizeResponse();
                   })
                   .catch((error) => {
                     console.error('❌ Error updating inventory:', error);
                     console.error('   Error details:', error.message);
                     inventoryUpdateError = error.message;
                     // Still continue - PO status is updated
-                    sendResponse();
+                    finalizeResponse();
                   });
               }
             );
           } else {
             // No inventory update needed, send response immediately
-            sendResponse();
+            finalizeResponse();
           }
         }
       );

@@ -3,6 +3,7 @@ import axios from 'axios';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { formatCurrencyINR } from '../utils/currency';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -137,7 +138,7 @@ const Dashboard = () => {
     },
     {
       name: 'Total Inventory Value',
-      value: `$${((analytics.inventory?.total_inventory_value || 0) / 1000).toFixed(1)}K`,
+      value: `${formatCurrencyINR(analytics.inventory?.total_inventory_value || 0)}`,
       icon: '💰',
       color: 'bg-emerald-500',
       link: '/analytics',

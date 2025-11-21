@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
+import { formatCurrencyINR } from '../utils/currency';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -124,7 +125,7 @@ const Analytics = () => {
         borderWidth: 2,
       },
       {
-        label: 'Total Value ($)',
+        label: 'Total Value (₹K)',
         data: orderTrends.map((t) => (t.total_value || 0) / 1000),
         backgroundColor: 'rgba(251, 191, 36, 0.5)',
         borderColor: 'rgba(251, 191, 36, 1)',
@@ -195,7 +196,7 @@ const Analytics = () => {
           <div className="bg-white rounded-lg shadow p-6">
             <p className="text-sm font-medium text-gray-500">Total Inventory Value</p>
             <p className="mt-2 text-3xl font-bold text-gray-900">
-              ${((dashboardData.inventory?.total_inventory_value || 0) / 1000).toFixed(1)}K
+              {formatCurrencyINR(dashboardData.inventory?.total_inventory_value || 0)}
             </p>
             <p className="mt-1 text-sm text-gray-500">
               {dashboardData.inventory?.total_items || 0} items
@@ -213,7 +214,7 @@ const Analytics = () => {
           <div className="bg-white rounded-lg shadow p-6">
             <p className="text-sm font-medium text-gray-500">Total Order Value</p>
             <p className="mt-2 text-3xl font-bold text-gray-900">
-              ${((dashboardData.purchaseOrders?.total_order_value || 0) / 1000).toFixed(1)}K
+              {formatCurrencyINR(dashboardData.purchaseOrders?.total_order_value || 0)}
             </p>
             <p className="mt-1 text-sm text-gray-500">
               {dashboardData.purchaseOrders?.total_orders || 0} orders
@@ -285,10 +286,10 @@ const Analytics = () => {
                         {vendor.completed_orders || 0}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        ${(vendor.total_value || 0).toFixed(2)}
+                        {formatCurrencyINR(vendor.total_value || 0)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        ${(vendor.avg_order_value || 0).toFixed(2)}
+                        {formatCurrencyINR(vendor.avg_order_value || 0)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         <span className="flex items-center">
@@ -352,7 +353,7 @@ const Analytics = () => {
               <div className="flex justify-between">
                 <span className="text-gray-600">Avg Order Value:</span>
                 <span className="font-medium">
-                  ${(dashboardData.purchaseOrders?.avg_order_value || 0).toFixed(2)}
+                  {formatCurrencyINR(dashboardData.purchaseOrders?.avg_order_value || 0)}
                 </span>
               </div>
             </div>

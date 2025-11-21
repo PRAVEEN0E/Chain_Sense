@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../config/database');
 const { authenticate } = require('../middleware/auth');
+const { geocodeAddress } = require('../utils/geocode');
 const router = express.Router();
 
 // Get all shipments
@@ -90,7 +91,7 @@ router.get('/:id', authenticate, (req, res) => {
 });
 
 // Create shipment
-router.post('/', authenticate, (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const { po_id, vendor_id, origin_address, destination_address, carrier, estimated_delivery } = req.body;
 
   if (!vendor_id || !origin_address || !destination_address) {
@@ -100,10 +101,31 @@ router.post('/', authenticate, (req, res) => {
   // Generate tracking number
   const tracking_number = `TRK-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
+  let originCoords = null;
+  try {
+    originCoords = await geocodeAddress(origin_address);
+  } catch (error) {
+    console.error('Origin geocoding failed:', error.message);
+  }
+
+  const initialLat = originCoords?.lat || null;
+  const initialLng = originCoords?.lng || null;
+
   db.run(
-    `INSERT INTO shipments (tracking_number, po_id, vendor_id, origin_address, destination_address, carrier, estimated_delivery)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [tracking_number, po_id || null, vendor_id, origin_address, destination_address, carrier || null, estimated_delivery || null],
+    `INSERT INTO shipments (tracking_number, po_id, vendor_id, origin_address, destination_address, carrier, estimated_delivery, current_location, current_lat, current_lng)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      tracking_number,
+      po_id || null,
+      vendor_id,
+      origin_address,
+      destination_address,
+      carrier || null,
+      estimated_delivery || null,
+      origin_address,
+      initialLat,
+      initialLng,
+    ],
     function(err) {
       if (err) {
         return res.status(500).json({ message: 'Database error', error: err.message });
@@ -113,9 +135,9 @@ router.post('/', authenticate, (req, res) => {
 
       // Create initial history entry
       db.run(
-        `INSERT INTO shipment_history (shipment_id, status, location, notes)
-         VALUES (?, 'pending', ?, 'Shipment created')`,
-        [shipmentId, origin_address],
+        `INSERT INTO shipment_history (shipment_id, status, location, lat, lng, notes)
+         VALUES (?, 'pending', ?, ?, ?, 'Shipment created')`,
+        [shipmentId, origin_address, initialLat, initialLng],
         () => {}
       );
 
@@ -129,48 +151,78 @@ router.post('/', authenticate, (req, res) => {
 });
 
 // Update shipment location/status
-router.put('/:id', authenticate, (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   const { status, current_location, current_lat, current_lng, notes } = req.body;
 
-  db.get('SELECT * FROM shipments WHERE id = ?', [req.params.id], (err, shipment) => {
-    if (err || !shipment) {
+  try {
+    const shipment = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM shipments WHERE id = ?', [req.params.id], (err, row) => {
+        if (err) return reject(err);
+        resolve(row);
+      });
+    });
+
+    if (!shipment) {
       return res.status(404).json({ message: 'Shipment not found' });
     }
 
     const newStatus = status || shipment.status;
-    const newLocation = current_location || shipment.current_location;
-    const newLat = current_lat !== undefined ? current_lat : shipment.current_lat;
-    const newLng = current_lng !== undefined ? current_lng : shipment.current_lng;
+    let newLocation = current_location || shipment.current_location;
+    let newLat = current_lat !== undefined ? current_lat : shipment.current_lat;
+    let newLng = current_lng !== undefined ? current_lng : shipment.current_lng;
 
-    db.run(
-      `UPDATE shipments 
-       SET status = ?,
-           current_location = ?,
-           current_lat = ?,
-           current_lng = ?,
-           updated_at = CURRENT_TIMESTAMP,
-           actual_delivery = CASE WHEN ? = 'delivered' THEN CURRENT_TIMESTAMP ELSE actual_delivery END
-       WHERE id = ?`,
-      [newStatus, newLocation, newLat, newLng, newStatus, req.params.id],
-      function(err) {
-        if (err) {
-          return res.status(500).json({ message: 'Database error', error: err.message });
+    if (current_location && (current_lat === undefined || current_lng === undefined)) {
+      try {
+        const coords = await geocodeAddress(current_location);
+        if (coords) {
+          newLat = coords.lat;
+          newLng = coords.lng;
         }
-
-        // Add history entry if status or location changed
-        if (status || current_location || current_lat !== undefined || current_lng !== undefined) {
-          db.run(
-            `INSERT INTO shipment_history (shipment_id, status, location, lat, lng, notes)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [req.params.id, newStatus, newLocation, newLat, newLng, notes || 'Status updated'],
-            () => {}
-          );
-        }
-
-        res.json({ message: 'Shipment updated successfully' });
+      } catch (error) {
+        console.error('Update geocoding failed:', error.message);
       }
-    );
-  });
+    }
+
+    await new Promise((resolve, reject) => {
+      db.run(
+        `UPDATE shipments 
+         SET status = ?,
+             current_location = ?,
+             current_lat = ?,
+             current_lng = ?,
+             updated_at = CURRENT_TIMESTAMP,
+             actual_delivery = CASE WHEN ? = 'delivered' THEN CURRENT_TIMESTAMP ELSE actual_delivery END
+         WHERE id = ?`,
+        [newStatus, newLocation, newLat, newLng, newStatus, req.params.id],
+        function(err) {
+          if (err) return reject(err);
+          resolve();
+        }
+      );
+    });
+
+    if (status || current_location || current_lat !== undefined || current_lng !== undefined) {
+      await new Promise((resolve, reject) => {
+        db.run(
+          `INSERT INTO shipment_history (shipment_id, status, location, lat, lng, notes)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [req.params.id, newStatus, newLocation, newLat, newLng, notes || 'Status updated'],
+          (err) => {
+            if (err) return reject(err);
+            resolve();
+          }
+        );
+      });
+    }
+
+    res.json({ message: 'Shipment updated successfully', current_lat: newLat, current_lng: newLng });
+  } catch (error) {
+    if (error && error.message === 'Shipment not found') {
+      return res.status(404).json({ message: 'Shipment not found' });
+    }
+    console.error('Shipment update failed:', error);
+    res.status(500).json({ message: 'Database error', error: error.message });
+  }
 });
 
 // Delete shipment (Admin only)

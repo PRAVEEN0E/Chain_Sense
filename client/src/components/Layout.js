@@ -16,11 +16,12 @@ const Layout = () => {
   // Navigation based on role
   const getNavigation = () => {
     if (isVendor) {
-      // Vendor-specific navigation - only see their orders and shipments
+      // Vendor-specific navigation - limited modules
       return [
         { name: 'Dashboard', href: '/dashboard', icon: '📊' },
         { name: 'Purchase Orders', href: '/purchase-orders', icon: '📋' },
         { name: 'Shipments', href: '/shipments', icon: '🚚' },
+        { name: 'Billing', href: '/billing', icon: '💳' },
       ];
     }
     // Admin/Manager/Staff navigation
@@ -31,6 +32,7 @@ const Layout = () => {
       { name: 'Purchase Orders', href: '/purchase-orders', icon: '📋' },
       { name: 'Shipments', href: '/shipments', icon: '🚚' },
       { name: 'Analytics', href: '/analytics', icon: '📈' },
+      { name: 'Billing', href: '/billing', icon: '💳' },
     ];
   };
 

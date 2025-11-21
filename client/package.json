@@ -15,7 +15,9 @@
     "@react-three/fiber": "^8.15.11",
     "@react-three/drei": "^9.88.13",
     "three": "^0.158.0",
-    "react-hot-toast": "^2.4.1"
+    "react-hot-toast": "^2.4.1",
+    "leaflet": "^1.9.4",
+    "react-leaflet": "^4.2.1"
   },
   "scripts": {
     "start": "react-scripts start",

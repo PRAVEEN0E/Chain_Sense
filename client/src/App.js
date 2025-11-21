@@ -10,6 +10,7 @@ import Vendors from './pages/Vendors';
 import PurchaseOrders from './pages/PurchaseOrders';
 import Shipments from './pages/Shipments';
 import Analytics from './pages/Analytics';
+import Billing from './pages/Billing';
 import Layout from './components/Layout';
 
 function App() {
@@ -34,6 +35,7 @@ function App() {
             <Route path="purchase-orders" element={<PurchaseOrders />} />
             <Route path="shipments" element={<Shipments />} />
             <Route path="analytics" element={<Analytics />} />
+            <Route path="billing" element={<Billing />} />
           </Route>
         </Routes>
       </Router>

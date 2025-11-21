@@ -7,16 +7,16 @@ const router = express.Router();
 
 // Email transporter
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: process.env.SMTP_PORT || 587,
+  host:  'smtp.gmail.com',
+  port:  587,
   secure: false,
   auth: {
-    user: process.env.SMTP_USER|| 'pp0600310@gmail.com',
-    pass: process.env.SMTP_PASS|| 'mspyffquelfhsgnd'
+    user:  'pp0600310@gmail.com',
+    pass:  'mspyffquelfhsgnd'
   }
 });
 
-// Twilio client (optional)
+
 let twilioClient = null;
 if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
   twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
